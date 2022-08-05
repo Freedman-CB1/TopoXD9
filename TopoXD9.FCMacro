@@ -1,0 +1,668 @@
+ # This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as 
+# published by the Free Software Foundation, either version 3 of the 
+# License, or (at your option) any later version.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+ # --------------------
+__Title__= "TopoX series"
+__Author__ = "freedman"
+__Version__ = "1.0"
+__Date__    = "3/02/2022"
+__Requires__ = "Built on 20.275"  
+__Communication__ = "User:freedman" 
+
+from PySide import QtGui,QtCore
+import FreeCAD as App
+import FreeCADGui as gui
+
+##########################################################################
+edge_tolerance = .00001
+############################################################################
+Version_name = "TopoXD9"
+
+if Gui.getMainWindow().findChild(QtGui.QWidget, Version_name):    # all ready running test
+    print("The Macro is already running.....")
+    exit()
+
+class cbToolBox(QtGui.QDockWidget):
+    def __init__(self, parent = Gui.getMainWindow()):
+        global Version_name 
+        self.dialog_width = 150   # DIALOG WIDTH  DIALOG WIDTH  DIALOG WIDTH  DIALOG WIDTH  DIALOG WIDTH      
+        self.dialog_height = 620   # DIALOG HEIGHT  DIALOG HEIGHT  DIALOG HEIGHT  DIALOG HEIGHT   
+          
+        myw = Gui.getMainWindow()   
+        self.reporting = myw.findChild(QtGui.QTextEdit, "Report view")
+
+        super(cbToolBox, self).__init__(Gui.getMainWindow(), QtCore.Qt.Tool)
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+#        self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+        self.setAttribute(QtCore.Qt.WA_WindowPropagation, True)
+        self.setAutoFillBackground(True)
+        self.setObjectName(Version_name)
+        self.setWindowTitle(Version_name)
+          
+        self.build_first()    # this calls all the buttons, at the bottom of the file
+        self.wid.setLayout(self.lay)
+        self.setWidget(self.wid)
+ 
+        self.move(Gui.getMainWindow().frameGeometry().right()-160, Gui.getMainWindow().frameGeometry().top()+171)
+  #      self.restore_dialog()
+         
+        doc = FreeCAD.ActiveDocument                   
+        if doc == None:
+            doc = FreeCAD.newDocument()
+
+        mw = Gui.getMainWindow()
+        mw.workbenchActivated.connect(self.wbChange)
+
+        self.delay_timer = QtCore.QTimer()
+        self.delay_timer.timeout.connect(self.on_delay_timer)
+
+        self.flash_timer = QtCore.QTimer()
+        self.flash_timer.timeout.connect(self.on_flash_timer)
+
+        self.in_sketcher = False
+        self.tolerance = edge_tolerance
+        self.sortedObjects = []
+        self.mylist = []
+        self.bad_obj = [] 
+
+############  for shapebinder stuff
+        self.binder_lock = False  
+        self.S1sortedObjects = []
+        self.S1mylist = []
+    
+
+        FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Sketcher/General").SetBool("AutoRecompute",False)
+
+ ###########################    start #######################
+    def restore_dialog(self):
+   
+        if self.show_report.isChecked():
+            self.report_stat = True
+        else: self.report_stat = False
+
+
+        self.build_first()
+        self.wid.setLayout(self.lay)
+        self.setWidget(self.wid)
+        self.resize(100,150)
+        self.setMaximumWidth(self.dialog_width) 
+        self.setMaximumHeight(self.dialog_height)   
+        self.color = "background-color:gainsboro;"   
+        self.setStyleSheet(self.color)   
+        self.setAutoFillBackground(True)
+        color = "background-color:gainsboro;"
+        self.update_placement.setStyleSheet(color)
+  
+        if self.report_stat == True:
+            self.show_report.setChecked(True)        
+        else: 
+            self.show_report.setChecked(False)   
+ 
+
+    def on_vis_dev(self):
+        self.vis_dev.setChecked(False)        
+        doc = FreeCAD.ActiveDocument
+        if doc != None:
+            for obj in doc.Objects:
+                if obj.TypeId[:4] == 'Part' or obj.TypeId == "Sketcher::SketchObject":
+                    if hasattr(obj.ViewObject,'Deviation'):  # should be a sketch
+                        obj.ViewObject.Deviation = 0.05 ;        
+                        obj.ViewObject.AngularDeflection = 10.0
+            App.ActiveDocument.recompute() 
+
+    def on_close_sketch(self):
+        Gui.ActiveDocument.resetEdit()
+        App.ActiveDocument.commitTransaction()
+
+    def reset_placement(self):
+        doc = FreeCAD.ActiveDocument
+        for obj in doc.Objects:
+            if obj.TypeId == "Sketcher::SketchObject" or obj.TypeId == "PartDesign::Plane" or obj.TypeId == "PartDesign::Line":  
+                obj.Placement = obj.Conx_placement
+                if hasattr(obj,'AttachmentOffset'):
+                    obj.AttachmentOffset = obj.Conx_attachment_offset
+
+    def restore_placement(self):
+        doc = FreeCAD.ActiveDocument
+        for obj in doc.Objects:
+            if obj.TypeId ==  "Sketcher::SketchObject" or obj.TypeId == "PartDesign::Plane" or obj.TypeId == "PartDesign::Line":  
+                obj.Conx_placement = obj.Placement 
+                if hasattr(obj,'AttachmentOffset'):
+                    obj.Conx_attachment_offset =  obj.AttachmentOffset 
+
+    def clearLayout(self,layout):
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+              child.widget().deleteLater()
+
+    def show_ready(self):
+        self.set_status.setText("  ------\n   Ready \n -------")
+        self.run_refacing.setText("Update Model") 
+        self.run_refacing.setStyleSheet("QPushButton" "{" "color:black;" "border: 3px solid teal;"  "}"   "QPushButton::hover" "{" "background-color :palegreen;"  "}" )     
+
+    def on_delay_timer(self):
+        self.delay_timer.stop()
+        self.on_refacing() 
+
+                 
+####################################################    start on button press
+    def on_color_to_refacing(self):
+        doc = FreeCAD.ActiveDocument 
+        if doc != None:  
+            self.on_new_property()
+            if self.in_sketcher == True:
+                btn = Gui.getMainWindow().findChild(QtGui.QPushButton, "manualUpdate")        
+                btn.click()
+                App.activeDocument().recompute()  
+            self.restore_dialog()
+            self.show_ready()
+    
+            doc = FreeCAD.ActiveDocument       
+            for obj in doc.Objects:
+                if obj.TypeId == "Sketcher::SketchObject" or obj.TypeId == "PartDesign::Plane" or obj.TypeId == "PartDesign::Line":
+                    if not hasattr(obj,"Conx_placement"):
+                       
+                        self.set_status.setText("   ----\n No placements! \n   ---- ")
+                        self.color="background-color:cyan;" 
+                        self.set_status.setStyleSheet(self.color)
+                        return
+            self.color="background-color:red;"
+            self.set_status.setStyleSheet(self.color)
+       
+            self.set_status.setText("        --------\n        Wait! \n       -------- ")   
+            self.run_refacing.setStyleSheet(self.color)
+            FreeCADGui.updateGui() 
+            self.delay_timer.start(300)  
+
+                                                                    
+###################
+    def on_refacing(self):
+
+        self.count = 0        
+        doc = FreeCAD.ActiveDocument
+        if self.show_report.isChecked():
+            self.reporting.clear()
+            print("OK!")
+        
+        self.pass_number = 2
+        if self.show_report.isChecked():
+            self.reporting.clear()
+ 
+        App.activeDocument().recompute()
+        self.pass_number =0
+        if FreeCAD.ActiveDocument.isTouched() == True or  self.check_4_quick_update() != 0:
+            if self.show_report.isChecked():
+                print("Wait  !!")
+                FreeCADGui.updateGui()   
+            self.anti_topo_model2()
+            App.activeDocument().recompute() 
+         
+            if FreeCAD.ActiveDocument.isTouched() == False and self.check_4_quick_update() == 0:
+                self.pass_number = 2 
+            else:
+                self.pass_number= 1
+                if  self.check_4_quick_update() != 0:
+                    self.list_sketches()
+        else:
+            self.pass_number = 2 
+
+        if self.pass_number ==1:
+            if self.check_4_quick_update() >0:  # and FreeCAD.ActiveDocument.isTouched() == False:
+                self.color="background-color:yellow;" 
+                self.setStyleSheet(self.color)   
+                self.set_delete.setEnabled(True)
+                self.update_placement.setEnabled(True)
+                self.set_status.setText("     -------------\n  Placement issue??  \n      ------------")
+            else:
+                self.set_delete.setEnabled(False)
+                self.update_placement.setEnabled(False)
+                self.color="background-color:tomato;" 
+                self.set_status.setStyleSheet(self.color)
+                self.set_status.setText("     -------------\n      Model Error ??  \n      ------------")
+           
+            self.setStyleSheet(self.color)   
+            self.setAutoFillBackground(True)
+       
+            App.activeDocument().recompute()   
+            FreeCADGui.updateGui() 
+
+                 
+        else:  
+            self.show_ready()
+            self.set_delete.setEnabled(True)
+            self.update_placement.setEnabled(True) 
+            self.color = "background-color:khaki;"  # this sets the  
+            self.setStyleSheet(self.color)
+            self.set_status.setStyleSheet( "color:black;")        
+        
+            self.set_status.setText("     -------------\n      Model OK!  \n      ------------")
+            self.setStyleSheet(self.color) 
+            self.setAutoFillBackground(True) 
+             
+      
+            self.run_refacing.setText("Update Model") 
+            self.run_refacing.setStyleSheet("QPushButton" "{" "color:black;" "border: 2px solid teal;"  "}"   "QPushButton::hover" "{" "background-color :palegreen;"  "}" )     
+        App.activeDocument().recompute()      
+        FreeCADGui.updateGui()   
+       
+
+    def list_sketches(self):
+        self.line05=QtGui.QLabel(" ~ This moved ~", self)
+        self.lay.addWidget(self.line05)
+        self.bad_obj.clear()
+        self.flasher = QtGui.QCheckBox("  Flash ",self)
+        self.flasher.clicked.connect(self.on_flash)
+        self.flasher.setStyleSheet( "color:black;")
+        self.lay.addWidget(self.flasher)
+        doc = FreeCAD.ActiveDocument
+        for obj in doc.Objects:
+            if obj.TypeId == "Sketcher::SketchObject" or obj.TypeId == "PartDesign::Plane" or obj.TypeId == "PartDesign::Line":  # or obj.TypeId == "PartDesign::ShapeBinder" or obj.TypeId == "PartDesign::SubShapeBinder":     
+                if obj.Placement.Base.isEqual(obj.Conx_placement.Base, self.tolerance)  and obj.Placement.Rotation.isSame(obj.Conx_placement.Rotation, self.tolerance):
+                    continue
+                else:
+                    self.to_dialog(obj)
+                    
+                
+    def to_dialog(self,obj):
+        self.line_wid = 2.0
+        self.ext_name = str("self." + obj.Name)
+        self.ext_name = QtGui.QCheckBox(str(obj.Name),self)
+        self.ext_name.clicked.connect(self.on_ob_select)
+        if hasattr(obj,'ViewObject'):
+            if hasattr(obj.ViewObject,'LineWidth'):
+                self.line_wid = obj.ViewObject.LineWidth 
+        self.ob_vis = obj.ViewObject.Visibility
+        self.bad_obj.append([self.ob_vis  ,self.ext_name  ,obj  ,self.line_wid])  
+        self.ext_name.setStyleSheet( "color:black;")
+        self.lay.addWidget(self.ext_name)
+        if obj.ViewObject.Visibility == True:
+            self.ext_name.setChecked(True)
+        else:   
+            self.ext_name.setChecked(False)
+        
+    def on_ob_select(self):
+        for i in self.bad_obj:
+            if i[1].isChecked():  # #1 is the name of the checkbox, also the name of the sketch
+                i[2].ViewObject.Visibility = True
+                i[0] = i[2].ViewObject.Visibility
+
+            else:                
+                i[2].ViewObject.Visibility = False
+                i[0] = i[2].ViewObject.Visibility
+
+    def on_flash(self):
+        for i in self.bad_obj:
+            if hasattr(i[2],'ViewObject'):
+                if hasattr(i[2].ViewObject,'LineWidth'):
+                    i[2].ViewObject.LineWidth = 7.0
+            FreeCADGui.updateGui() 
+            i[2].ViewObject.Visibility = True
+        self.flash_timer.start(1000)
+ 
+    def on_flash_timer(self):
+        self.flash_timer.stop()
+        self.flasher.setChecked(False)
+        for i in self.bad_obj:
+         #   print(i[0],i[1],i[2],i[3])
+            if hasattr(i[2],'ViewObject'):
+                if hasattr(i[2].ViewObject,'LineWidth'):
+                    i[2].ViewObject.LineWidth = i[3]
+            if i[0] == True:
+                i[2].ViewObject.Visibility = True
+            else:                
+                i[2].ViewObject.Visibility = False
+            doc = FreeCAD.ActiveDocument
+            Gui.Selection.addSelection(doc.Name,i[2].Name)  
+            
+
+    def check_4_quick_update(self):
+        doc = FreeCAD.ActiveDocument
+        self.error_count = 0
+        for obj in doc.Objects:
+            if obj.TypeId == "Sketcher::SketchObject" or obj.TypeId == "PartDesign::Plane" or obj.TypeId == "PartDesign::Line":  # or obj.TypeId == "PartDesign::ShapeBinder" or obj.TypeId == "PartDesign::SubShapeBinder":      
+                if obj.Placement.Rotation.isSame(obj.Conx_placement.Rotation, self.tolerance):
+                    if obj.Placement.Base.isEqual(obj.Conx_placement.Base, self.tolerance):
+                        continue
+                else:  
+                    self.error_count += 1
+        return self.error_count
+
+
+    def wbChange(self,name):
+        mw = Gui.getMainWindow()
+        active = Gui.activeWorkbench().__class__.__name__
+        if active == "SketcherWorkbench":
+            self.in_sketcher = True         
+            self.on_new_property()
+
+        if active != "SketcherWorkbench":
+            self.in_sketcher = False       
+            self.on_color_to_refacing()
+
+
+    def on_new_property(self):  ### Rename
+        self.show_ready()
+        doc = FreeCAD.ActiveDocument
+        if doc != None:
+            doc = FreeCAD.ActiveDocument
+            for obj in doc.Objects:
+                if obj.TypeId == "Sketcher::SketchObject" or obj.TypeId == "PartDesign::Plane" or obj.TypeId == "PartDesign::Line":  # or obj.TypeId == "PartDesign::ShapeBinder" or obj.TypeId == "PartDesign::SubShapeBinder":
+                    if not hasattr(obj,"Conx_placement"):
+                        obj.addProperty("App::PropertyPlacement","Conx_placement")
+                        obj.Conx_placement = obj.Placement 
+                if obj.TypeId == "Sketcher::SketchObject" or obj.TypeId == "PartDesign::Plane" or obj.TypeId == "PartDesign::Line":
+                    if not hasattr(obj,"Conx_attachment_offset"):
+                        obj.addProperty("App::PropertyPlacement","Conx_attachment_offset") 
+                        obj.Conx_attachment_offset = obj.AttachmentOffset        
+       
+
+    def on_update_placements(self):
+        self.on_new_property()
+        self.show_ready()
+        doc = FreeCAD.ActiveDocument
+        for obj in doc.Objects: 
+            if hasattr(obj,'Conx_placement'):
+                obj.Conx_placement = obj.Placement
+            if hasattr(obj,"Conx_attachment_offset") and hasattr(obj,'AttachmentOffset '):
+                obj.Conx_attachment_offset = obj.AttachmentOffset 
+        self.on_color_to_refacing()
+ 
+
+    def on_delete(self):
+        doc = FreeCAD.ActiveDocument
+        if doc != None:
+            self.show_ready()
+            doc = FreeCAD.ActiveDocument
+            for obj in doc.Objects:
+                if hasattr(obj,'Conx_placement'):
+                    obj.removeProperty("Conx_placement")
+                if hasattr(obj,'Conx_face'):
+                    obj.removeProperty("Conx_face")  
+                if hasattr(obj,"Conx_attachment_offset"):
+                    obj.removeProperty("Conx_attachment_offset")  
+
+
+
+    def build_first(self):
+
+        
+        self.wid = QtGui.QWidget()
+        self.lay = QtGui.QVBoxLayout()
+
+        self.lay.setContentsMargins(2,2,1,1)        
+
+        self.color = "background-color:khaki;"  # this sets the  
+        self.setStyleSheet(self.color) 
+
+        self.setMaximumWidth(self.dialog_width) 
+        self.setMaximumHeight(self.dialog_height)     
+
+        self.line1 = QtGui.QLabel("   ~~  " +Version_name +"  ~~", self)
+        self.lay.addWidget(self.line1)
+        self.line1.setStyleSheet("color:black;" )  
+
+        self.button_close= QtGui.QCheckBox("Exit",self)
+        self.button_close.clicked.connect(self.on_close)       
+        self.lay.addWidget(self.button_close)
+        self.button_close.setStyleSheet("color:black;")
+
+   
+        self.set_delete = QtGui.QCheckBox("Delete placements")
+        self.set_delete.clicked.connect(self.on_delete)       
+        self.lay.addWidget(self.set_delete)
+        self.set_delete.setStyleSheet("color:black;")
+
+        self.show_report = QtGui.QCheckBox("To Report " ,self)
+        self.lay.addWidget(self.show_report)
+        self.show_report.setStyleSheet( "color:black;")
+   
+
+        self.line3 = QtGui.QLabel(" ~ Work options ~", self)
+        self.lay.addWidget(self.line3)
+        self.line3.setStyleSheet("color:blue" )  
+
+        self.vis_dev = QtGui.QCheckBox("High Res Edge" ,self)
+        self.vis_dev.clicked.connect(self.on_vis_dev)  
+        self.lay.addWidget(self.vis_dev)
+        self.vis_dev.setStyleSheet("color:black;")
+
+        self.enable_binder = QtGui.QCheckBox("Binder select" ,self)
+        self.lay.addWidget(self.enable_binder)
+        self.enable_binder.clicked.connect(self.on_binder)  
+        self.enable_binder.setStyleSheet( "color:black;")
+        
+        self.update_placement = QtGui.QPushButton("Update Placement",self)
+        self.update_placement.setStyleSheet("QPushButton" "{" "color:black;" "border: 1px solid teal;"  "}"   "QPushButton::hover" "{" "background-color :steelblue;"  "}" )  
+        self.update_placement.clicked.connect(self.on_update_placements)       
+        self.lay.addWidget(self.update_placement)
+        
+ 
+
+        self.set_status= QtGui.QLabel("       ---------- \n        Status  \n       ----------",self)
+        self.lay.addWidget(self.set_status)
+        self.set_status.setStyleSheet( "color:black;")
+
+        self.run_refacing = QtGui.QPushButton("Update Model",self)
+        self.run_refacing.setStyleSheet("QPushButton" "{" "background-color :honeydew;" "border: 3px solid teal;"  "}"   "QPushButton::hover" "{" "background-color :palegreen;"  "}" )   
+        self.run_refacing.clicked.connect(self.on_color_to_refacing)       
+        self.lay.addWidget(self.run_refacing)
+
+        self.color = "background-color:khaki;"  # this sets the  
+        self.setStyleSheet(self.color) 
+
+
+
+
+    def sortedBodyList(self,ob_name):
+        self.sortedObjects.clear()
+        self.mylist.clear()
+        self.found_obj = False
+        documentObjects = App.ActiveDocument.Objects  #list in tree list order?  
+        if self.show_report.isChecked():
+            print(" List of tree objects")
+        doc = FreeCAD.ActiveDocument
+        for obj in doc.Objects:
+            if obj.TypeId == "PartDesign::Body" and obj.Name == ob_name:
+                self.found_obj = True
+                self.first = True
+                for ob1 in obj.OutList:  
+                    if ob1.TypeId != "App::Origin": 
+                        if self.show_report.isChecked():
+                            print(ob1.Name)
+                        self.mylist.append(ob1)   
+               
+        if self.found_obj == True:
+            self.sortedObjects = [obj for obj in documentObjects if obj in self.mylist]  
+            return self.sortedObjects
+        else: 
+       
+            self.set_status.setText("        ---------\n     Select a Body \n        --------- ")
+            color="background-color:cyan;" 
+            self.set_status.setStyleSheet(color)
+            return None 
+
+    def on_binder(self):
+        if self.enable_binder.isChecked():
+            None
+        else:
+                
+            self.activeBody = Gui.ActiveDocument.ActiveView.getActiveObject('pdbody')
+            if self.activeBody  != None:
+                self.bod_list = self.BodyList(self.activeBody)  
+                for obj in self.bod_list:  
+                    if  obj.TypeId == "PartDesign::ShapeBinder" or obj.TypeId == "PartDesign::SubShapeBinder": # in active, found shape binder
+                        self.my_support = obj.Support[0][0]   #  here is the support
+                        if self.my_support.Name ==  self.selected_body.Name:    #does the support equal the boady selected
+                      #      print("match")
+                            self.binder_object = obj
+                      #      print(self.binder_object.Name,self.selected_body.Name,self.my_support.Name,self.activeBody.Name)
+                            self.binder_lock = True 
+                            self.binder_object.ViewObject.Visibility = False
+                            self.selected_body.ViewObject.Visibility = True  
+                            break
+            Gui.Selection.clearSelection()
+                  
+    
+    def anti_topo_model2(self):
+       
+        doc = FreeCAD.ActiveDocument
+        for ob2 in doc.Objects:
+            if ob2.TypeId == "PartDesign::Body": #   and ob2.Name == "Body001":
+                App.activeDocument().recompute()
+            #    FreeCADGui.updateGui()   
+                if self.show_report.isChecked(): 
+                    print(ob2.Name)
+                
+
+                if ob2.Tip == None:  # Check the body name
+                    if self.show_report.isChecked(): 
+                        print("    !!!!!!!!!!! No TIP   !!!!!!!!!!!!!")
+                    return
+                self.body_obj = ob2 
+                self.tip_name  = ob2.Tip
+                if self.show_report.isChecked():
+                    print("-------------------------------------------------------",ob2.Name)   #,ob2.Tip.Name)
+                  
+                bod_list = self.sortedBodyList(self.body_obj.Name)        
+   
+                for obj in bod_list:
+                    if obj.TypeId == "Sketcher::SketchObject"  or obj.TypeId == "PartDesign::Plane" or obj.TypeId == "PartDesign::Line":  
+                        print(obj.Name)
+                        if obj.MapMode ==  'SectionOfRevolution':
+                            obj.Placement = obj.Conx_placement
+                            obj.Support = self.support_copy 
+                        #    print("mode")
+                            continue
+  
+                        if self.show_report.isChecked():    
+                            print("Found in sorted list = ",obj.Name)
+                        self.support_copy = obj.Support
+                        if hasattr(obj,"Conx_attachment_offset"):
+                            if not obj.AttachmentOffset.Base.isEqual(obj.Conx_attachment_offset.Base, self.tolerance):
+                                obj.Conx_placement = obj.Placement
+                                if self.show_report.isChecked():
+                                    print("AttachmentOffset change update")
+               
+                        if obj.Support:
+                            if self.show_report.isChecked():
+                                print("found support",)
+                            self.my_support = obj.Support[0][0]  # find the pad name
+                            self.face_portion = obj.Support[0][1]  # find the face name
+                            if self.my_support.isDerivedFrom('App::Plane') or obj.TypeId == "PartDesign::ShapeBinder":    # if the support is a origin plane, then exit
+                                if self.show_report.isChecked():
+                                    print(" ---------------This is a Standard Plane or a shapebinder, go to next")
+                                continue
+
+                            if self.show_report.isChecked():
+                                print(self.my_support.Name)
+                            self.supp_obj = None
+                            doc = FreeCAD.ActiveDocument
+                            for ob5 in doc.Objects:
+                                if ob5.Name == self.my_support.Name: 
+                                    self.supp_obj = ob5
+                                    if self.show_report.isChecked(): 
+                                        print("TIP for scan =",ob5.Name)
+                            
+                            doc = FreeCAD.ActiveDocument
+                            if self.supp_obj != None:
+                                FreeCAD.getDocument(doc.Name).getObject(self.body_obj.Name).Tip =    FreeCAD.getDocument(doc.Name).getObject( self.supp_obj.Name) 
+                                self.found_face = False
+                                if self.show_report.isChecked():                 
+                                    print("Trying = " + obj.Name )
+                                for i, fac in enumerate( self.my_support.Shape.Faces):    # Going through all faces of the object
+                                    if fac.Surface.isPlanar():
+                                        facName = 'Face{:d}'.format(i+1)      # Building face name from its index
+                                        obj.Support  = [(FreeCAD.getDocument(FreeCAD.ActiveDocument.Name).getObject(self.my_support.Name),facName) ]   # make sketch002 support = face
+                                        if self.show_report.isChecked(): 
+                                            print(" on " + self.my_support.Name + "->" + facName)
+                                        if obj.Placement.Rotation.isSame(obj.Conx_placement.Rotation, edge_tolerance):
+                                            if obj.Placement.Base.isEqual(obj.Conx_placement.Base, edge_tolerance): 
+                                                self.found_face = True
+                                                App.activeDocument().recompute()     
+                                                if self.show_report.isChecked():
+                                                    print(" >>>>>   Placements compare OK!!!!!  Attaching = " + obj.Name +" to " +  facName + "\n")
+                                                break
+                   
+                                if self.found_face == False:    # did not find a face so set it to the last know copied sketch placement
+                                    obj.Placement = obj.Conx_placement
+                                    obj.Support = self.support_copy 
+                                    if self.show_report.isChecked():
+                                        print(obj.Name + " >>>>~~~~~~ Can't find face ~~~~~~<<<<<<<<<<<")
+                        
+                        else:  print("No Support ??????????????????????",obj.Name)
+                FreeCAD.getDocument(doc.Name).getObject(self.body_obj.Name).Tip =  FreeCAD.getDocument(doc.Name).getObject( self.tip_name.Name) 
+                doc = FreeCAD.ActiveDocument
+
+    def on_close(self):
+        print("Bye")
+        FreeCADGui.Selection.removeObserver(s) 
+        self.close()
+
+################################################################
+    def BodyList(self,ob_name):
+        self.sortedObjects.clear()
+        self.mylist.clear()
+        documentObjects = App.ActiveDocument.Objects  #list in tree list order?  
+        doc = FreeCAD.ActiveDocument
+        for obj in doc.Objects:
+            if obj.TypeId == "PartDesign::Body" and obj.Name == ob_name.Name:
+                self.found_obj = True
+                for ob1 in obj.OutList:  
+                    if ob1.TypeId != "App::Origin": 
+                        self.mylist.append(ob1)  
+        if self.found_obj == True:
+            self.sortedObjects = [obj for obj in documentObjects if obj in self.mylist]  
+      #      print(self.sortedObjects)
+            return self.sortedObjects
+
+
+    def process_selects(self,pnt,element):
+         if self.enable_binder.isChecked():
+            self.sel = FreeCADGui.Selection.getSelection()[0]
+            if self.sel.TypeId != "PartDesign::Body" :
+                for parent_obj in self.sel.InList:         
+                    if parent_obj.TypeId == "PartDesign::Body":
+                        self.selected_body = parent_obj
+                        break
+                if self.binder_lock == True  and  self.sel.Name != self.binder_object.Name:
+                    self.binder_lock = False
+                    self.binder_object.ViewObject.Visibility = False 
+                    self.my_support.ViewObject.Visibility = True 
+                 
+                elif self.binder_lock == False:              
+                    self.activeBody = Gui.ActiveDocument.ActiveView.getActiveObject('pdbody')
+                    if self.activeBody  != None:
+                        self.bod_list = self.BodyList(self.activeBody)  
+                        for obj in self.bod_list:  
+                            if  obj.TypeId == "PartDesign::ShapeBinder" or obj.TypeId == "PartDesign::SubShapeBinder": # in active, found shape binder
+                                self.my_support = obj.Support[0][0]   #  here is the support
+                                if self.my_support.Name ==  self.selected_body.Name:    #does the support equal the boady selected
+                                    print("match")
+                                    self.binder_object = obj
+                                    print(self.binder_object.Name,self.selected_body.Name,self.my_support.Name,self.activeBody.Name)
+                                    self.binder_lock = True 
+                                    self.binder_object.ViewObject.Visibility = True
+                                    self.selected_body.ViewObject.Visibility = False  
+                                    break
+                    Gui.Selection.clearSelection()
+#################### ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+class SelObserver:
+    def addSelection(self,document, object, element, position):
+        visCB.process_selects(position,element)    
+
+s=SelObserver()
+FreeCADGui.Selection.addObserver(s)
+
+visCB = cbToolBox() 
+visCB.show()
+
+
+
+                               
+
